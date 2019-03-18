@@ -199,9 +199,17 @@ namespace viewer {
 
       const osg::GraphicsContext::Traits* traits_ptr = gc->getTraits ();
       camera->setGraphicsContext(gc);
-      camera->setViewport(new osg::Viewport(0,0, traits_ptr->width, traits_ptr->height));
-      camera->setProjectionMatrixAsPerspective(
-          30.0f, static_cast<double>(traits_ptr->width)/static_cast<double>(traits_ptr->height), 1.0f, 10000.0f );
+      
+      
+      
+      
+      
+      camera->setViewport( new osg::Viewport(0, 0, traits_ptr->width, traits_ptr->height) );
+      
+      // NO influence
+      camera->setProjectionMatrixAsPerspective(30.0f, static_cast<double>(traits_ptr->width)/static_cast<double>(traits_ptr->height), 1.0f, 10000.0f );
+      // Intrinsics
+
       GLenum buffer = traits_ptr->doubleBuffer ? GL_BACK : GL_FRONT;
       camera->setDrawBuffer(buffer);
       camera->setReadBuffer(buffer);

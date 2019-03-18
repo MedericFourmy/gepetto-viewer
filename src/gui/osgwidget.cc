@@ -18,6 +18,9 @@
 #include "gepetto/gui/mainwindow.hh"
 #include <gepetto/gui/pick-handler.hh>
 
+#include <osg/io_utils>
+
+
 #ifndef Q_MOC_RUN
 #include <boost/regex.hpp>
 #endif
@@ -95,6 +98,8 @@ namespace gepetto {
       viewer_->setThreadingModel(threadingModel);
 
       osgQt::GLWidget* glWidget = graphicsWindow_->getGLWidget();
+      glWidget->setFixedSize(640, 480);
+      glWidget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
       //glWidget->setForwardKeyEvents(true);
       QVBoxLayout* hblayout = new QVBoxLayout (this);
       hblayout->setContentsMargins(1,1,1,1);
@@ -281,8 +286,8 @@ namespace gepetto {
       traits_ptr->windowName = name;
       traits_ptr->x = this->x();
       traits_ptr->y = this->y();
-      traits_ptr->width = this->width();
-      traits_ptr->height = this->height();
+      traits_ptr->width = 640;
+      traits_ptr->height = 480;
       traits_ptr->windowDecoration = false;
       traits_ptr->doubleBuffer = true;
       traits_ptr->vsync = true;
@@ -295,8 +300,23 @@ namespace gepetto {
 
       camera->setClearColor( osg::Vec4(0.2f, 0.2f, 0.6f, 1.0f) );
       camera->setViewport( new osg::Viewport(0, 0, traits_ptr->width, traits_ptr->height) );
-      camera->setProjectionMatrixAsPerspective(30.0f, static_cast<double>(traits_ptr->width)/static_cast<double>(traits_ptr->height), 1.0f, 10000.0f );
+      
+      // camera->setProjectionMatrixAsPerspective(30.0f, static_cast<double>(traits_ptr->width)/static_cast<double>(traits_ptr->height), 1.0f, 10000.0f );
+      // Frustrum size
+      double near = 1;
+      double far = 10000.0;
+      // Default intrinsics
+      double alpha = 320;
+      double beta = 320;
+      double cx = 320;
+      double cy = 240;
 
+      // projection matrix definition
+      osg::Matrixd Mproj(alpha/cx, 0.0, 0.0, 0.0,
+                         0.0, beta/cy, 0.0, 0.0, 
+                         0.0, 0.0, -(near+far)/(far-near), -1.0,
+                         0.0, 0.0, -2*far*near/(far-near), 0.0);
+      camera->setProjectionMatrix(Mproj);
       viewer_->setKeyEventSetsDone(0);
 
       // Manipulators
