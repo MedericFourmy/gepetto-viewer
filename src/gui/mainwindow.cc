@@ -66,6 +66,8 @@ namespace gepetto {
       ui_->bodyTreeContent->init(ui_->bodyTree, ui_->propertyArea);
 
       // This scene contains elements required for User Interaction.
+      osg()->createScene("gepetto-gui");
+      // TODO remove me. This is kept for backward compatibility
       osg()->createScene("hpp-gui");
 
       // Setup the main OSG widget
@@ -217,7 +219,7 @@ namespace gepetto {
 
     void MainWindow::createDefaultView()
     {
-      std::stringstream ss; ss << "hpp_gui_window_" << osgWindows_.size();
+      std::stringstream ss; ss << "window_" << osgWindows_.size();
       createView (ss.str());
     }
 
@@ -227,11 +229,18 @@ namespace gepetto {
           tr("Window ") + osgWidget->objectName(), this);
       dockOSG->setObjectName ("gepetto-gui.osg." + osgWidget->objectName());
       dockOSG->setWidget(osgWidget);
+      dockOSG->setSizePolicy (QSizePolicy::MinimumExpanding, QSizePolicy::MinimumExpanding);
+      // TODO at the moment, when the widget is made floating and then non-floating
+      // again, the OSGWidget becomes hidden. I could not find the bug so I removed
+      // the feature DockWidgetFloatable.
+      dockOSG->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
       connect(dockOSG,SIGNAL(visibilityChanged(bool)),SLOT(dockVisibilityChanged(bool)));
       addDockWidget(Qt::RightDockWidgetArea, dockOSG);
       if (osgWindows_.empty()) {
         // This OSGWidget should be the central view
         centralWidget_ = osgWidget;
+        osg()->addSceneToWindow("gepetto-gui", centralWidget_->windowID());
+        // TODO remove me. This is kept for backward compatibility
         osg()->addSceneToWindow("hpp-gui", centralWidget_->windowID());
       }
       actionSearchBar_->addAction(new NodeAction("Attach camera " + osgWidget->objectName() + " to selected node", osgWidget, this));

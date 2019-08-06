@@ -19,6 +19,7 @@
 #include <QSettings>
 #include <QDir>
 #include <QtDebug>
+#include <QStyleFactory>
 
 #include <osg/DisplaySettings>
 #include <osg/ArgumentParser>
@@ -45,7 +46,13 @@ namespace gepetto {
       , captureDirectory ()
       , captureFilename ("screenshot")
       , captureExtension ("png")
+      , avconv ("avconv")
       , installDirectory (installDir)
+#if (QT_VERSION < QT_VERSION_CHECK(5,0,0))
+      , appStyle ("cleanlooks")
+#else
+      , appStyle ("fusion")
+#endif
 
       , mw (0)
     {
@@ -54,6 +61,13 @@ namespace gepetto {
       user.mkpath (path);
       user.cd (path);
       captureDirectory = user.absolutePath().toStdString();
+
+      avConvInputOptions
+            << "-r" << "25";
+      avConvOutputOptions
+            << "-vf" << "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            << "-r" << "25"
+            << "-vcodec" << "libx264";
     }
 
     void Settings::setupPaths () const
@@ -148,14 +162,6 @@ namespace gepetto {
       while (arguments.read ("-x", opt) || arguments.read ("--run-pyscript", opt))
         addPyScript (QString::fromStdString(opt));
 
-      arguments.reportRemainingOptionsAsUnrecognized(osg::ArgumentParser::BENIGN);
-      if (arguments.errors(osg::ArgumentParser::CRITICAL)) {
-        arguments.writeErrorMessages(std::cout);
-        retVal = 2;
-      } else if (arguments.errors(osg::ArgumentParser::BENIGN)) {
-        arguments.writeErrorMessages(std::cout);
-      }
-
       for (int i = 0; i < arguments.argc()-1; ) {
         if (strncmp (arguments.argv()[i], "-ORB", 4) == 0) {
           addOmniORB (arguments.argv()[i], arguments.argv()[i+1]);
@@ -164,8 +170,16 @@ namespace gepetto {
           ++i;
       }
 
+      arguments.reportRemainingOptionsAsUnrecognized(osg::ArgumentParser::BENIGN);
+      if (arguments.errors(osg::ArgumentParser::CRITICAL)) {
+        arguments.writeErrorMessages(std::cout);
+        retVal = 2;
+      } else if (arguments.errors(osg::ArgumentParser::BENIGN)) {
+        arguments.writeErrorMessages(std::cout);
+      }
+
       if (!omniORBargv_.contains("-ORBendPoint"))
-        addOmniORB ("-ORBendPoint", "::localhost:12321");
+        addOmniORB ("-ORBendPoint", ":::12321");
 
       if (genAndQuit && retVal < 1) retVal = 1;
 
@@ -293,6 +307,10 @@ namespace gepetto {
         << nl << tab << "Directory:              " << tab << captureDirectory
         << nl << tab << "Filename:               " << tab << captureFilename
         << nl << tab << "Extension:              " << tab << captureExtension
+        << nl << tab << "Avconv command:         " << tab << avconv.toStdString()
+        << nl << tab << "Avconv input options:   " << tab << avConvInputOptions .join(" ").toStdString()
+        << nl << tab << "Avconv output options:  " << tab << avConvOutputOptions.join(" ").toStdString()
+
         << nl
         << nl << "omniORB configuration" ;
       for (int i = 1; i < omniORBargv_.size(); i+=2)
@@ -317,7 +335,7 @@ namespace gepetto {
           QCoreApplication::organizationName (),
           getQSettingsFileName (predifinedRobotConf));
       if (robot.status() != QSettings::NoError) {
-        logError(QString ("Enable to open configuration file ")
+        logError(QString ("Unable to open configuration file ")
                  + robot.fileName());
       } else {
         foreach (QString name, robot.childGroups()) {
@@ -345,7 +363,7 @@ namespace gepetto {
           QCoreApplication::organizationName (),
           getQSettingsFileName (predifinedEnvConf));
       if (env.status() != QSettings::NoError) {
-        logError(QString ("Enable to open configuration file ") + env.fileName());
+        logError(QString ("Unable to open configuration file ") + env.fileName());
       } else {
         foreach (QString name, env.childGroups()) {
           env.beginGroup(name);
@@ -377,7 +395,7 @@ namespace gepetto {
           QCoreApplication::organizationName (),
           getQSettingsFileName (configurationFile));
       if (env.status() != QSettings::NoError) {
-        logError(QString ("Enable to open configuration file ") + env.fileName());
+        logError(QString ("Unable to open configuration file ") + env.fileName());
       } else {
         osg::DisplaySettings* ds = osg::DisplaySettings::instance().get();
         env.beginGroup("viewer");
@@ -385,6 +403,18 @@ namespace gepetto {
         int nbMultiSamples = 4;
         GET_PARAM(nbMultiSamples, int, toInt);
         ds->setNumMultiSamples(nbMultiSamples);
+
+        QString appStyle;
+        GET_PARAM(appStyle, QString, toString);
+        if (!appStyle.isNull()) {
+          if (QStyleFactory::keys().contains(appStyle, Qt::CaseInsensitive))
+            this->appStyle = appStyle;
+          else {
+            logError ("Available application styles are " + QStyleFactory::keys().join(", "));
+            logError ("Requested value is " + appStyle);
+            logError ("Current value is " + this->appStyle);
+          }
+        }
 
         GET_PARAM(useNameService, bool, toBool);
         env.endGroup ();
@@ -405,6 +435,14 @@ namespace gepetto {
         foreach (QString name, env.childKeys()) {
             addOmniORB ("-ORB" + name, env.value(name).toString());
         }
+        env.endGroup ();
+
+        env.beginGroup("avconv");
+        avconv = env.value ("command", avconv).toString();
+        avConvInputOptions  = env.value ("input_options" ,
+            avConvInputOptions).toStringList();
+        avConvOutputOptions = env.value ("output_options",
+            avConvOutputOptions).toStringList();
         env.endGroup ();
         log (QString ("Read configuration file ") + env.fileName());
       }
@@ -468,6 +506,7 @@ namespace gepetto {
       env.setValue ("refreshRate", refreshRate);
       env.setValue ("nbMultiSamples", ds->getNumMultiSamples());
       env.setValue ("useNameService", useNameService);
+      env.setValue ("appStyle", appStyle);
       env.endGroup ();
 
       env.beginGroup("plugins");
@@ -478,13 +517,21 @@ namespace gepetto {
       env.endGroup ();
 
       env.beginGroup("pyplugins");
-      foreach (QString name, pyplugins_)
-        env.setValue(name, !noPlugin);
+      for (PluginManager::PyMap::const_iterator p = pluginManager_.pyplugins ().constBegin();
+          p != pluginManager_.pyplugins().constEnd(); p++) {
+        env.setValue(p.key(), (noPlugin)?false:pluginManager_.isPyPluginLoaded (p.key()));
+      }
       env.endGroup ();
 
       env.beginGroup("omniORB");
       for (int i = 1; i < omniORBargv_.size(); i+=2)
         env.setValue (omniORBargv_[i-1].mid(4), omniORBargv_[i]);
+      env.endGroup ();
+
+      env.beginGroup("avconv");
+      env.setValue ("command", avconv);
+      env.setValue ("input_options", avConvInputOptions);
+      env.setValue ("output_options", avConvInputOptions);
       env.endGroup ();
       log (QString ("Wrote configuration file ") + env.fileName());
     }
@@ -558,7 +605,11 @@ namespace gepetto {
 
     void Settings::addOmniORB (const QString& arg, const QString& value)
     {
-      omniORBargv_ << arg << value;
+      int i = omniORBargv_.indexOf (arg);
+      if (i == -1)
+        omniORBargv_ << arg << value;
+      else
+        omniORBargv_[i+1] = value;
     }
 
     void Settings::log(const QString &t)

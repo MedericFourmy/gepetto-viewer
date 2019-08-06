@@ -205,6 +205,8 @@ namespace viewer {
   }
   using ::osg::Matrix;
 
+  const float Node::TransparencyRenderingBinThreashold = 0.99f;
+
   /* Declaration of private function members */
   void Node::init ()
   {
@@ -213,16 +215,20 @@ namespace viewer {
        connected to the parent <- switch_node_ptr_                           <- auto_transform_ptr_ <- connection of children here
        <- normal_node_ptr_
     */
+    scale_ = osgVector3 (1, 1, 1);
 
     switch_node_ptr_ = new ::osg::Group;
     hl_switch_node_ptr_ = new ::osg::Group;
     transform_ptr_ = new ::osg::MatrixTransform;
+    transform_ptr_ ->setName ("positionInParentNode");
 
     switch_node_ptr_->setNodeMask(NodeBit | IntersectionBit);
     switch_node_ptr_->setName (id_name_);
     wireframe_modes_.resize(2);
     wireframe_modes_[FILL]      = new ::osg::Group;
+    wireframe_modes_[FILL]      ->setName ("wireframe: FILL");
     wireframe_modes_[WIREFRAME] = new ::osg::Group;
+    wireframe_modes_[WIREFRAME] ->setName ("wireframe: WIREFRAME");
 
     /* Building hierarchie */
     selected_wireframe_ = FILL;
@@ -241,11 +247,12 @@ namespace viewer {
     }
     // setHighlightState(0);
     hl_switch_node_ptr_->addChild(highlight_nodes_[selected_highlight_]);
+    hl_switch_node_ptr_->setName ("highlight switch");
 
     wireframe_modes_[WIREFRAME]->setStateSet(getWireframeStateSet());
     wireframe_modes_[WIREFRAME]->setDataVariance (osg::Object::STATIC);
     geode_ptr_ = NULL;
-    alpha_ = 0;
+    alpha_ = 1.;
 
     visibilityMode_ = VISIBILITY_ON;
     lightingMode_   = LIGHT_INFLUENCE_ON;
@@ -283,9 +290,13 @@ namespace viewer {
           Vector4Property::Getter_t(),
           Vector4Property::setterFromMemberFunction(this, &Node::setColor)));
     addProperty(
-        FloatProperty::create("Transparency",
+        FloatProperty::create("Alpha",
           FloatProperty::getterFromMemberFunction(this, &Node::getAlpha),
           FloatProperty::setterFromMemberFunction(this, &Node::setAlpha)));
+    addProperty(
+        Vector3Property::create("Scale",
+          Vector3Property::getterFromMemberFunction(this, &Node::getScale),
+          Vector3Property::setterFromMemberFunction(this, &Node::setScale)));
     addProperty(
         ConfigurationProperty::create("Transform",
           ConfigurationProperty::getterFromMemberFunction(this, &Node::getGlobalTransform),
@@ -306,40 +317,13 @@ namespace viewer {
     init();
   }
 
-  const PropertyPtr_t& Node::property(const std::string& name) const
-  {
-    PropertyMap_t::const_iterator _prop = properties_.find(name);
-    if (_prop == properties_.end())
-      throw std::invalid_argument("Unknown property " + name);
-    const PropertyPtr_t& prop = _prop->second;
-    if (!prop)
-      throw std::invalid_argument("Unknown property " + name);
-    return prop;
-  }
-
-  bool Node::hasProperty(const std::string& name) const
-  {
-    PropertyMap_t::const_iterator _prop = properties_.find(name);
-    return (_prop != properties_.end());
-  }
-
-  void Node::addProperty(const PropertyPtr_t& prop)
-  {
-    addProperty(prop->name(), prop);
-  }
-
-  void Node::addProperty(const std::string& name, const PropertyPtr_t& prop)
-  {
-    properties_[name] = prop;
-  }
-
   void Node::updateTransform ()
   {
     osg::Matrixf M;
     M.setRotate (M_.quat);
     M.setTrans  (M_.position);
 
-    transform_ptr_->setMatrix (Ms_*M);
+    transform_ptr_->setMatrix (::osg::Matrix::scale(scale_)*Ms_*M);
     dirty_ = true;
   }
 
@@ -354,12 +338,8 @@ namespace viewer {
 
   void Node::setStaticTransform(const osgVector3 & position, const osgQuat & quat)
   {
-    osgQuat q, so; osgVector3 t, s;
-    Ms_.decompose(t, q, s, so);
-
-    Matrix m (quat);
-    m.setTrans(position);
-    Ms_ = Matrix::scale(s) * m;
+    Ms_.setRotate (quat);
+    Ms_.setTrans  (position);
 
     updateTransform ();
   }
@@ -380,9 +360,7 @@ namespace viewer {
 
   osgVector3 Node::getScale() const
   {
-    osgQuat q, so; osgVector3 t, s;
-    Ms_.decompose(t, q, s, so);
-    return s;
+    return scale_;
   }
 
   void Node::setScale(float scale)
@@ -390,16 +368,12 @@ namespace viewer {
     setScale (osgVector3(scale,scale,scale));
   }
 
- void Node::setScale(const osgVector3 &scale)
-   {
-    osgQuat q, so; osgVector3 t, s;
-    Ms_.decompose(t, q, s, so);
-    Matrix m (q);
-    m.setTrans(t);
-    Ms_ = ::osg::Matrix::scale(scale) * m;
+  void Node::setScale(const osgVector3 &scale)
+  {
+    scale_ = scale;
 
     updateTransform ();
-   }
+  }
 
   void Node::setVisibilityMode (const VisibilityMode& mode)
   {
@@ -638,16 +612,12 @@ namespace viewer {
 	osg::Material *mat;
 	if (ss->getAttribute(osg::StateAttribute::MATERIAL))
 	  mat = dynamic_cast<osg::Material*>(ss->getAttribute(osg::StateAttribute::MATERIAL));
-	else
-	  {
-	    mat = new osg::Material;
-	    ss->setAttribute(mat, osg::StateAttribute::OFF);
-	  }
-	mat->setTransparency(osg::Material::FRONT_AND_BACK, alpha);
-	if (alpha_ > 0)
-	  ss->setRenderingHint(osg::StateSet::TRANSPARENT_BIN);
-	else
-          ss->setRenderingHint(osg::StateSet::DEFAULT_BIN);
+        else {
+          mat = new osg::Material;
+          ss->setAttribute(mat, osg::StateAttribute::OFF);
+        }
+        mat->setAlpha(osg::Material::FRONT_AND_BACK, alpha);
+        setTransparentRenderingBin (alpha_<TransparencyRenderingBinThreashold);
         dirty_ = true;
       }
   }
@@ -655,6 +625,36 @@ namespace viewer {
   float Node::getAlpha() const
   {
     return alpha_;
+  }
+
+  void Node::setTransparency (const float& transparency)
+  {
+    setAlpha (1.f - transparency);
+  }
+
+  float Node::getTransparency() const
+  {
+    return 1.f - getAlpha();
+  }
+
+  void Node::setTransparentRenderingBin (bool transparent)
+  {
+    if (geode_ptr_.get() == NULL)
+    {
+      std::cout << "You must initialize a Geode on " << id_name_ << " to use Alpha" << std::endl;
+      return ;
+    }
+    osg::StateSet* ss = geode_ptr_.get()->getStateSet();
+    if (ss)
+    {
+      bool isTransparent = (ss->getRenderingHint() == osg::StateSet::TRANSPARENT_BIN);
+      if (transparent == isTransparent) return;
+      if (transparent)
+        ss->setRenderingHint(osg::StateSet::TRANSPARENT_BIN);
+      else
+        ss->setRenderingHint(osg::StateSet::DEFAULT_BIN);
+      dirty_ = true;
+    }
   }
 
   Node::~Node ()

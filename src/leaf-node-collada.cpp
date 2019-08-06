@@ -76,6 +76,9 @@ namespace viewer {
 
   void LeafNodeCollada::init()
   {
+    group_ptr_ = new osg::Group;
+    group_ptr_->setName ("groupForMaterial");
+
 #if OSG_VERSION_GREATER_OR_EQUAL(3,3,3)
     static osg::ref_ptr<osgDB::ObjectCache> object_cache (new osgDB::ObjectCache);
 #else
@@ -102,20 +105,36 @@ namespace viewer {
       } else {
         // get the extension of the meshs file
         std::string ext = osgDB::getLowerCaseFileExtension(collada_file_path_);
-        if (ext == "dae" && *localeconv()->decimal_point != '.') {
-          std::cerr << "Warning: your locale convention uses '"
-            << localeconv()->decimal_point << "' as decimal separator while DAE "
-            "expects '.'.\nSet LC_NUMERIC to a locale convetion using '.' as "
-            "decimal separator (e.g. export LC_NUMERIC=\"en_US.utf-8\")."
-            << std::endl;
-        }
         if(ext == "obj"){
           options->setOptionString("noRotation");
           collada_ptr_ = osgDB::readNodeFile(collada_file_path_,options);
         }
-        else
+        else if (ext == "dae") {
+          if (*localeconv()->decimal_point != '.') {
+            std::cerr << "Warning: your locale convention uses '"
+              << localeconv()->decimal_point << "' as decimal separator while DAE "
+              "expects '.'.\nSet LC_NUMERIC to a locale convetion using '.' as "
+              "decimal separator (e.g. export LC_NUMERIC=\"en_US.utf-8\")."
+              << std::endl;
+          }
+
           collada_ptr_ = osgDB::readNodeFile(collada_file_path_,options);
-        if (ext == "dae") {
+
+          // FIXME: Fixes https://github.com/Gepetto/gepetto-viewer/issues/95
+          // The bug: Assimp seems to ignore the DAE up_axis tag. Because this
+          // cannot be fixed in assimp without a huge impact, we make GV
+          // compatible with assimp.
+          //
+          // The fix: OSG DAE plugin rotates the actual model with a root
+          // PositionAttitudeTransform, when the DAE up axis is not Z.
+          // We simply reset the attitude.
+          osg::PositionAttitudeTransform* pat =
+            dynamic_cast<osg::PositionAttitudeTransform*> (collada_ptr_.get());
+          if (pat != NULL) {
+            std::cout << "Reset up_axis to Z_UP." << std::endl;
+            pat->setAttitude (osgQuat());
+          }
+
           bool error = false;
           if (!collada_ptr_) {
             std::cout << "File: " << collada_file_path_ << " could not be loaded\n";
@@ -129,7 +148,8 @@ namespace viewer {
             std::cout << "You may try to convert the file with the following command:\n"
               "osgconv " << collada_file_path_ << ' ' << collada_file_path_ << ".osgb" << std::endl;
           }
-        }
+        } else
+          collada_ptr_ = osgDB::readNodeFile(collada_file_path_,options);
       }
       if (!collada_ptr_)
         throw std::invalid_argument(std::string("File ") + collada_file_path_ + std::string(" found but could not be opened. Check that a plugin exist."));
@@ -141,9 +161,11 @@ namespace viewer {
       collada_ptr_->getOrCreateStateSet()->setMode(GL_BLEND, ::osg::StateAttribute::ON);
       collada_ptr_->setDataVariance(osg::Object::STATIC);
     }
+    collada_ptr_->setName ("meshfile");
 
     /* Create PositionAttitudeTransform */
-    this->asQueue()->addChild(collada_ptr_);
+    group_ptr_->addChild(collada_ptr_);
+    this->asQueue()->addChild(group_ptr_);
 
     addProperty(StringProperty::create("Mesh file",
           StringProperty::getterFromMemberFunction(this, &LeafNodeCollada::meshFilePath),
@@ -274,13 +296,14 @@ namespace viewer {
     mat_ptr->setDiffuse (osg::Material::FRONT_AND_BACK,color); 
     mat_ptr->setAmbient (osg::Material::FRONT_AND_BACK,ambient); 
 
-    collada_ptr_->getOrCreateStateSet()->setAttribute(mat_ptr.get());    
+    group_ptr_->getOrCreateStateSet()->setAttribute(mat_ptr.get());    
+    setTransparentRenderingBin (color[3] < Node::TransparencyRenderingBinThreashold);
     setDirty();
   }
     
   osgVector4 LeafNodeCollada::getColor() const
   {
-    osg::StateSet* ss = collada_ptr_.get()->getStateSet();
+    osg::StateSet* ss = group_ptr_->getStateSet();
     if (ss) {
       osg::Material *mat = dynamic_cast<osg::Material*>
         (ss->getAttribute(osg::StateAttribute::MATERIAL));
@@ -292,7 +315,7 @@ namespace viewer {
   void LeafNodeCollada::setAlpha(const float& alpha)
   {
     // TODO this overload is probably not necessary.
-    osg::StateSet* ss = getColladaPtr().get()->getStateSet();
+    osg::StateSet* ss = group_ptr_->getStateSet();
     if (ss)
       {
 	alpha_ = alpha;
@@ -325,7 +348,7 @@ namespace viewer {
       return;
     } 
     texture->setImage(image);
-    collada_ptr_->getStateSet()->setTextureAttributeAndModes(0,texture,osg::StateAttribute::ON);
+    collada_ptr_->getOrCreateStateSet()->setTextureAttributeAndModes(0,texture,osg::StateAttribute::ON);
     setDirty();
   }
 

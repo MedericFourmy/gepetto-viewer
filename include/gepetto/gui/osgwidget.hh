@@ -75,8 +75,15 @@ namespace gepetto {
       protected:
         virtual void paintEvent(QPaintEvent* event);
 
+        bool isFixedSize () const;
+
+        void setFixedSize (bool fixedSize);
+
+        void setWindowDimension (const osgVector2& size);
+
       private slots:
         void readyReadProcessOutput ();
+        void toggleFullscreenMode (bool fullscreenOn);
 
       private:
         void initToolBar ();
@@ -97,6 +104,8 @@ namespace gepetto {
         QProcess* process_;
         QDialog* showPOutput_;
         QTextBrowser* pOutput_;
+
+        QWidget* fullscreen_, *normal_;
 
         friend class PickHandler;
     };

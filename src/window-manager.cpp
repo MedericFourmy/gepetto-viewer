@@ -18,6 +18,7 @@
 #include <osgDB/WriteFile>
 
 #include <../src/is-dirty-visitor.h>
+#include <../src/internal/configuration.hh>
 
 namespace gepetto {
 namespace viewer {
@@ -59,6 +60,45 @@ namespace viewer {
           << timer->delta_s(tick_start, tick_end) << " seconds"<<std::endl;
       }
     }
+
+    struct ResizeHandler: osgGA::GUIEventHandler
+    {
+      ResizeHandler(osg::Camera* camera) : camera_ (camera) {}
+
+      virtual bool handle(
+          const osgGA::GUIEventAdapter& gea,
+          osgGA::GUIActionAdapter&      /*gaa*/,
+          osg::Object*                  /*obj*/,
+          osg::NodeVisitor*             /*nv*/
+          )
+      {
+        osgGA::GUIEventAdapter::EventType ev = gea.getEventType();
+
+        if(ev != osgGA::GUIEventAdapter::RESIZE) return false;
+
+        float w = (float)gea.getWindowWidth();
+        float h = (float)gea.getWindowHeight();
+
+        if(camera_.valid())
+          camera_->setProjectionMatrix(osg::Matrix::ortho2D(0.0f, w, 0.0f, h));
+
+        float m = w*0.01f;
+
+        texts_[WindowManager::BOTTOM][WindowManager::LEFT  ]->setPosition (osgVector3(  m,  m,0.f));
+        texts_[WindowManager::BOTTOM][WindowManager::CENTER]->setPosition (osgVector3(w/2,  m,0.f));
+        texts_[WindowManager::BOTTOM][WindowManager::RIGHT ]->setPosition (osgVector3(w-m,  m,0.f));
+        texts_[WindowManager::CENTER][WindowManager::LEFT  ]->setPosition (osgVector3(  m,h/2,0.f));
+        texts_[WindowManager::CENTER][WindowManager::CENTER]->setPosition (osgVector3(w/2,h/2,0.f));
+        texts_[WindowManager::CENTER][WindowManager::RIGHT ]->setPosition (osgVector3(w-m,h/2,0.f));
+        texts_[WindowManager::TOP   ][WindowManager::LEFT  ]->setPosition (osgVector3(  m,h-m,0.f));
+        texts_[WindowManager::TOP   ][WindowManager::CENTER]->setPosition (osgVector3(w/2,h-m,0.f));
+        texts_[WindowManager::TOP   ][WindowManager::RIGHT ]->setPosition (osgVector3(w-m,h-m,0.f));
+        return true;
+      }
+
+      osg::ref_ptr<osgText::Text>   texts_[3][3];
+      osg::observer_ptr<osg::Camera> camera_;
+    };
   }
 
     void WindowManager::createManipulator()
@@ -69,9 +109,9 @@ namespace viewer {
       manipulator_ptr->addMatrixManipulator('1',"trackball",new ::osgGA::TrackballManipulator);
       manipulator_ptr->addMatrixManipulator('2',"keyboard",new ::osgGA::KeyboardManipulator(windows.front()));
       manipulator_ptr->addMatrixManipulator('3',"tracker",new ::osgGA::NodeTrackerManipulator);
-      viewer_ptr_->setCameraManipulator( manipulator_ptr);      
+      viewer_ptr_->setCameraManipulator( manipulator_ptr);
     }
-  
+
   void WindowManager::createBackground()
   {
     // Enable Outline highlight state.
@@ -141,9 +181,145 @@ namespace viewer {
       //bg_camera_->setGraphicsContext(camera->getGraphicsContext());
     }
     
-    scene_ptr_->asGroup()->addChild(bg_camera_);
+    asGroup()->addChild(bg_camera_);
   }
-  
+
+  void WindowManager::createHUDcamera()
+  {
+    // Create HUD camera
+    osg::ref_ptr <const osg::GraphicsContext::Traits> traits_ptr = gc_->getTraits();
+
+    hud_camera_ = new osg::Camera;
+    hud_camera_->setName("hud_camera");
+    const osg::Node::NodeMask mask = ~IntersectionBit;
+    hud_camera_->setNodeMask(mask);
+
+    hud_camera_->setReferenceFrame( osg::Transform::ABSOLUTE_RF );
+    hud_camera_->setClearMask( GL_DEPTH_BUFFER_BIT );
+    hud_camera_->setRenderOrder( osg::Camera::POST_RENDER );
+    hud_camera_->setAllowEventFocus( false );
+    hud_camera_->setProjectionMatrix(
+        osg::Matrix::ortho2D(traits_ptr->x,traits_ptr->width,traits_ptr->y,traits_ptr->height));
+    hud_camera_->getOrCreateStateSet()->setMode(
+        GL_LIGHTING, osg::StateAttribute::OFF );
+
+    textGeode_ = new osg::Geode;
+    hud_camera_->addChild (textGeode_);
+
+    ResizeHandler* rh = new ResizeHandler(hud_camera_);
+    static osg::ref_ptr<osgText::Font> font = defaultFont();
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) {
+        osg::ref_ptr<osgText::Text>& text      = texts_[i][j];
+        text = new osgText::Text;
+        text->setAxisAlignment( osgText::TextBase::XY_PLANE );
+        text->setDataVariance( osg::Object::DYNAMIC );
+        text->setFont( font );
+        switch (i) {
+          case TOP:
+            switch (j) {
+              case LEFT  : text->setAlignment( osgText::TextBase::  LEFT_TOP ); break;
+              case CENTER: text->setAlignment( osgText::TextBase::CENTER_TOP ); break;
+              case RIGHT : text->setAlignment( osgText::TextBase:: RIGHT_TOP ); break;
+            }
+            break;
+          case CENTER:
+            switch (j) {
+              case LEFT  : text->setAlignment( osgText::TextBase::  LEFT_CENTER ); break;
+              case CENTER: text->setAlignment( osgText::TextBase::CENTER_CENTER ); break;
+              case RIGHT : text->setAlignment( osgText::TextBase:: RIGHT_CENTER ); break;
+            }
+            break;
+          case BOTTOM:
+            switch (j) {
+              case LEFT  : text->setAlignment( osgText::TextBase::  LEFT_BOTTOM ); break;
+              case CENTER: text->setAlignment( osgText::TextBase::CENTER_BOTTOM ); break;
+              case RIGHT : text->setAlignment( osgText::TextBase:: RIGHT_BOTTOM ); break;
+            }
+            break;
+        }
+
+        rh->texts_[i][j] = text;
+        textActive_[i][j] = false;
+      }
+    viewer_ptr_->addEventHandler (rh);
+
+    // Property to scene
+    addProperty (
+        StringProperty::create("Text/TopLeft",
+          boost::bind (&WindowManager::getText, this, TOP, LEFT),
+          boost::bind (&WindowManager::setText, this, TOP, LEFT, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/TopCenter",
+          boost::bind (&WindowManager::getText, this, TOP, CENTER),
+          boost::bind (&WindowManager::setText, this, TOP, CENTER, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/TopRight",
+          boost::bind (&WindowManager::getText, this, TOP, RIGHT),
+          boost::bind (&WindowManager::setText, this, TOP, RIGHT, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/CenterLeft",
+          boost::bind (&WindowManager::getText, this, CENTER, LEFT),
+          boost::bind (&WindowManager::setText, this, CENTER, LEFT, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/CenterCenter",
+          boost::bind (&WindowManager::getText, this, CENTER, CENTER),
+          boost::bind (&WindowManager::setText, this, CENTER, CENTER, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/CenterRight",
+          boost::bind (&WindowManager::getText, this, CENTER, RIGHT),
+          boost::bind (&WindowManager::setText, this, CENTER, RIGHT, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/BottomLeft",
+          boost::bind (&WindowManager::getText, this, BOTTOM, LEFT),
+          boost::bind (&WindowManager::setText, this, BOTTOM, LEFT, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/BottomCenter",
+          boost::bind (&WindowManager::getText, this, BOTTOM, CENTER),
+          boost::bind (&WindowManager::setText, this, BOTTOM, CENTER, _1, 20)));
+    addProperty (
+        StringProperty::create("Text/BottomRight",
+          boost::bind (&WindowManager::getText, this, BOTTOM, RIGHT),
+          boost::bind (&WindowManager::setText, this, BOTTOM, RIGHT, _1, 20)));
+  }
+
+  std::string WindowManager::getText (TextAlignment vPos, TextAlignment hPos) const
+  {
+    osg::ref_ptr<osgText::Text> text = texts_[vPos][hPos];
+    if (!text) return std::string();
+    else return text->getText().createUTF8EncodedString();
+  }
+
+  void WindowManager::setText (TextAlignment vPos, TextAlignment hPos,
+      const std::string& content, float size)
+  {
+    if (content.size() == 0) {
+      textGeode_->removeDrawable (texts_[vPos][hPos]);
+      textActive_[vPos][hPos] = false;
+
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          if (textActive_[i][j]) return;
+      asGroup()->removeChild(hud_camera_);
+      return;
+    }
+
+    osg::ref_ptr<osgText::Text>& text      = texts_[vPos][hPos];
+    if (!textActive_[vPos][hPos]) {
+      textGeode_->addDrawable( text );
+      textActive_[vPos][hPos] = true;
+    }
+    text->setCharacterSize( size );
+    text->setText( content );
+
+    if (!asGroup()->containsNode(hud_camera_)) {
+      osg::Viewport* vp = viewer_ptr_->getCamera()->getViewport();
+      viewer_ptr_->getEventQueue()->windowResize ((int)vp->x(), (int)vp->y(), (int)vp->width(), (int)vp->height());
+
+      asGroup()->addChild(hud_camera_);
+    }
+  }
+
   void WindowManager::applyBackgroundColor()
   {
     osg::Vec4Array* colors = new osg::Vec4Array;
@@ -228,10 +404,10 @@ namespace viewer {
 
     void WindowManager::init(osgViewer::Viewer* v, osg::GraphicsContext* gc)
     {
-      scene_ptr_ = GroupNode::create(gc->getTraits()->windowName);
+      setID (gc->getTraits()->windowName);
       
       viewer_ptr_ = v;
-      viewer_ptr_->setSceneData ( scene_ptr_->asGroup() );
+      viewer_ptr_->setSceneData ( asGroup() );
       lastSceneWasDisrty_ = true;
       
       /* init main camera */
@@ -246,37 +422,45 @@ namespace viewer {
       gc_ = osg::GraphicsContextRefPtr (gc);
       createBackground();
       createManipulator();
+      createHUDcamera();
     }
 
-    WindowManager::WindowManager () : nodeTrackerManipulatorIndex(2)
+    WindowManager::WindowManager ()
+      : GroupNode ("")
+      , nodeTrackerManipulatorIndex(2)
     {
         init (0, 0, DEF_WIDTH_WINDOW, DEF_HEIGHT_WINDOW);
     }
 
-    WindowManager::WindowManager (osg::GraphicsContext* gc) : nodeTrackerManipulatorIndex(2)
+    WindowManager::WindowManager (osg::GraphicsContext* gc)
+      : GroupNode ("")
+      , nodeTrackerManipulatorIndex(2)
     {
         init (gc);
     }
 
-    WindowManager::WindowManager (osgViewer::Viewer* v, osg::GraphicsContext* gc) : nodeTrackerManipulatorIndex(2)
+    WindowManager::WindowManager (osgViewer::Viewer* v, osg::GraphicsContext* gc)
+      : GroupNode ("")
+      , nodeTrackerManipulatorIndex(2)
     {
         init (v, gc);
     }
 
     WindowManager::WindowManager (const unsigned int& x,
-                                            const unsigned int& y,
-                                            const unsigned int& width,
-                                            const unsigned int& height) : nodeTrackerManipulatorIndex(2)
+                                  const unsigned int& y,
+                                  const unsigned int& width,
+                                  const unsigned int& height)
+      : GroupNode ("")
+      , nodeTrackerManipulatorIndex(2)
     {
         init (x, y, width, height);
     }
 
-    WindowManager::WindowManager (const WindowManager& other) : nodeTrackerManipulatorIndex(2)
+    WindowManager::WindowManager (const WindowManager& other)
+      : GroupNode (other)
+      , nodeTrackerManipulatorIndex(2)
     {
-      init ((unsigned int) other.getWindowPosition().x(),
-	    (unsigned int) other.getWindowPosition().y(),
-	    (unsigned int) other.getWindowDimension().x(),
-	    (unsigned int) other.getWindowDimension().y());
+      init (viewer_ptr_, gc_);
     }
 
     void WindowManager::initWeakPtr (WindowManagerWeakPtr other_weak_ptr)
@@ -357,7 +541,7 @@ namespace viewer {
 
     bool WindowManager::addNode(NodePtr_t graphical_object_ptr)
     {
-        bool result = scene_ptr_->addChild (graphical_object_ptr);
+        bool result = addChild (graphical_object_ptr);
         return result;
     }
 
@@ -371,7 +555,7 @@ namespace viewer {
       bool callFrame = screen_capture_ptr_;
       if (!callFrame) {
         IsDirtyVisitor isDirtyVisitor;
-        scene_ptr_->accept (isDirtyVisitor);
+        accept (isDirtyVisitor);
         // FIXME For some reasons, when highlight state of a node is changed,
         // method frame must be called twice to get it rendered properly.
         // lastSceneWasDisrty_ forces to draw twice after a dirty scene.
@@ -386,7 +570,7 @@ namespace viewer {
         return false;
 
       SetCleanVisitor setCleanVisitor;
-      scene_ptr_->accept (setCleanVisitor);
+      accept (setCleanVisitor);
       return true;
     }
 
@@ -395,12 +579,11 @@ namespace viewer {
         return viewer_ptr_->run();
     }
 
-    void WindowManager::setWindowDimension (const unsigned int& width,
-                                                 const unsigned int& height)
+    void WindowManager::setWindowDimension (const osgVector2& size)
     {
         /* Define new trait dimension of the main camera */
         const osg::GraphicsContext::Traits* traits_ptr = gc_->getTraits ();
-        gc_->resized (traits_ptr->x, traits_ptr->y, width, height);
+        gc_->resized (traits_ptr->x, traits_ptr->y, (int)size[0], (int)size[1]);
     }
 
     osgVector2 WindowManager::getWindowDimension() const
@@ -412,12 +595,11 @@ namespace viewer {
         return dimention;
     }
 
-    void WindowManager::setWindowPosition (const unsigned int& x_position,
-                                                const unsigned int& y_position)
+    void WindowManager::setWindowPosition (const osgVector2& position)
     {
         /* Define new trait dimension of the main camera */
         const osg::GraphicsContext::Traits* traits_ptr = gc_->getTraits ();
-        gc_->resized (x_position, y_position,
+        gc_->resized ((int)position[0], (int)position[1],
                 traits_ptr->width, traits_ptr->height);
     }
 
@@ -433,7 +615,6 @@ namespace viewer {
     WindowManager::~WindowManager()
     {
       stopCapture ();
-      scene_ptr_.reset();
       viewer_ptr_ = NULL;
     }
   

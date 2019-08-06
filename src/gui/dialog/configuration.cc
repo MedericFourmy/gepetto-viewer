@@ -24,6 +24,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 
+#include <gepetto/viewer/node-property.h>
+
 namespace gepetto {
   namespace gui {
 
@@ -71,9 +73,79 @@ namespace gepetto {
       q[0] = x; q[1] = y; q[2] = z; q[3] = w;
     }
 
-    ConfigurationDialog::ConfigurationDialog (const QString& name, const Configuration& q, QWidget *parent)
+    Vector3Dialog::Vector3Dialog (
+        const viewer::PropertyPtr_t property, const QString& name, QWidget *parent)
       : QDialog (parent)
-      , cfg (q)
+      , prop (property)
+      , pyValue (new QLineEdit)
+    {
+      for (int i = 0; i < 3; ++i) x[i] = new QDoubleSpinBox;
+
+      setModal (false);
+
+      setValueFromProperty ();
+
+      pyValue->setReadOnly (true);
+      setPyValue ();
+
+      for (int i = 0; i < 3; ++i)
+        connect(x[i], SIGNAL(valueChanged(double)), SLOT(updateValue()));
+
+      QDialogButtonBox *buttonBox = new QDialogButtonBox (QDialogButtonBox::Close, Qt::Horizontal);
+      connect (buttonBox->button (QDialogButtonBox::Close), SIGNAL(clicked(bool)), SLOT(accept()));
+
+      QFormLayout *layout = new QFormLayout;
+      layout->addRow(new QLabel (name));
+      for (int i = 0; i < 3; ++i)
+        layout->addRow("X" + QString::number(i), x[i]);
+      layout->addRow("value", pyValue);
+      layout->addRow(buttonBox);
+
+      setLayout (layout);
+    }
+
+    void Vector3Dialog::showEvent (QShowEvent* event)
+    {
+      setValueFromProperty();
+      QDialog::showEvent (event);
+    }
+
+    void Vector3Dialog::updateValue ()
+    {
+      for (int i = 0; i < 3; ++i)
+        cfg[i] = (float)x[i]->value();
+
+      setPyValue ();
+
+      emit valueChanged (cfg);
+    }
+
+    void Vector3Dialog::setValueFromProperty ()
+    {
+      prop->get (cfg);
+
+      for (int i = 0; i < 3; ++i) {
+        x[i]->setValue(cfg[i]);
+        x[i]->setRange(-1000,1000);
+        x[i]->setSingleStep(0.01);
+        x[i]->setDecimals(4);
+      }
+    }
+
+    void Vector3Dialog::setPyValue ()
+    {
+      static const QString sep(", ");
+      QString text = "[ ";
+      for (int i = 0; i < 3; ++i)
+        text += QString::number (cfg[i]) + sep;
+      text += " ]";
+      pyValue->setText (text);
+    }
+
+    ConfigurationDialog::ConfigurationDialog (
+        const viewer::PropertyPtr_t property, const QString& name, QWidget *parent)
+      : QDialog (parent)
+      , prop (property)
       , x     (new QDoubleSpinBox)
       , y     (new QDoubleSpinBox)
       , z     (new QDoubleSpinBox)
@@ -84,16 +156,10 @@ namespace gepetto {
     {
       setModal (false);
 
-      double _r,_p,_y;
-      getEulerFromQuat (q.quat,_p,_y,_r);
+      setConfigFromProperty ();
 
-      x->setValue(q.position[0]); x->setRange(-1000,1000); x->setSingleStep(0.01); x->setDecimals(4);
-      y->setValue(q.position[1]); y->setRange(-1000,1000); y->setSingleStep(0.01); y->setDecimals(4);
-      z->setValue(q.position[2]); z->setRange(-1000,1000); z->setSingleStep(0.01); z->setDecimals(4);
-
-      roll ->setValue(_r); roll ->setRange(-osg::PI, osg::PI); roll ->setSingleStep(0.01); roll ->setDecimals(4);
-      pitch->setValue(_p); pitch->setRange(-osg::PI, osg::PI); pitch->setSingleStep(0.01); pitch->setDecimals(4);
-      yaw  ->setValue(_y); yaw  ->setRange(-osg::PI, osg::PI); yaw  ->setSingleStep(0.01); yaw  ->setDecimals(4);
+      pyValue->setReadOnly (true);
+      setPyValue ();
 
       connect(x    , SIGNAL(valueChanged(double)), SLOT(updateConfig()));
       connect(y    , SIGNAL(valueChanged(double)), SLOT(updateConfig()));
@@ -101,9 +167,6 @@ namespace gepetto {
       connect(roll , SIGNAL(valueChanged(double)), SLOT(updateConfig()));
       connect(pitch, SIGNAL(valueChanged(double)), SLOT(updateConfig()));
       connect(yaw  , SIGNAL(valueChanged(double)), SLOT(updateConfig()));
-
-      pyValue->setReadOnly (true);
-      setPyValue ();
 
       QDialogButtonBox *buttonBox = new QDialogButtonBox (QDialogButtonBox::Close, Qt::Horizontal);
       connect (buttonBox->button (QDialogButtonBox::Close), SIGNAL(clicked(bool)), SLOT(accept()));
@@ -122,6 +185,12 @@ namespace gepetto {
       setLayout (layout);
     }
 
+    void ConfigurationDialog::showEvent (QShowEvent* event)
+    {
+      setConfigFromProperty();
+      QDialog::showEvent (event);
+    }
+
     void ConfigurationDialog::updateConfig ()
     {
       cfg.position[0] = (float)x->value();
@@ -132,6 +201,21 @@ namespace gepetto {
       setPyValue ();
 
       emit configurationChanged (cfg);
+    }
+
+    void ConfigurationDialog::setConfigFromProperty ()
+    {
+      prop->get (cfg);
+      double _r,_p,_y;
+      getEulerFromQuat (cfg.quat,_p,_y,_r);
+
+      x->setValue(cfg.position[0]); x->setRange(-1000,1000); x->setSingleStep(0.01); x->setDecimals(4);
+      y->setValue(cfg.position[1]); y->setRange(-1000,1000); y->setSingleStep(0.01); y->setDecimals(4);
+      z->setValue(cfg.position[2]); z->setRange(-1000,1000); z->setSingleStep(0.01); z->setDecimals(4);
+
+      roll ->setValue(_r); roll ->setRange(-osg::PI, osg::PI); roll ->setSingleStep(0.01); roll ->setDecimals(4);
+      pitch->setValue(_p); pitch->setRange(-osg::PI, osg::PI); pitch->setSingleStep(0.01); pitch->setDecimals(4);
+      yaw  ->setValue(_y); yaw  ->setRange(-osg::PI, osg::PI); yaw  ->setSingleStep(0.01); yaw  ->setDecimals(4);
     }
 
     void ConfigurationDialog::setPyValue ()

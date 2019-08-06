@@ -31,7 +31,7 @@ INCLUDE(cmake-module/osgqt.cmake)
 
 SET(PROJECT_NAME gepetto-viewer)
 SET(PROJECT_DESCRIPTION "An user-friendly Graphical Interface")
-SET(PROJECT_URL "https://github.com/humanoid-path-planner/gepetto-viewer")
+SET(PROJECT_URL "https://github.com/Gepetto/gepetto-viewer")
 
 SETUP_PROJECT()
 
@@ -118,7 +118,12 @@ ADD_QT_DEPENDENCY()
 ADD_OPTIONAL_DEPENDENCY("qgv")
 
 # {{{ PythonQt settings
-FINDPYTHON()
+IF(DEFINED PYTHON_DESIRED_VERSION)
+  FINDPYTHON(${PYTHON_DESIRED_VERSION} EXACT)
+ELSE()
+  FINDPYTHON()
+ENDIF()
+
 SET(CMAKE_MODULE_PATH
   ${CMAKE_SOURCE_DIR}/cmake-module/
   ${CMAKE_MODULE_PATH})
@@ -158,6 +163,7 @@ SET(${PROJECT_NAME}_HEADERS
 
 ADD_SUBDIRECTORY(src)
 ADD_SUBDIRECTORY(plugins)
+ADD_SUBDIRECTORY(pyplugins)
 ADD_SUBDIRECTORY(tests)
 
 # {{{ Packaging

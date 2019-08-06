@@ -35,7 +35,12 @@ namespace gepetto {
 
     QWidget* boolPropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop)
     {
+      QString toolTip (
+          "Python:\n"
+          "  gui.getBoolProperty(nodeName,\"%1\")\n"
+          "  gui.setBoolProperty(nodeName,\"%1\",boolean)");
       QCheckBox* cb = new QCheckBox;
+      cb->setToolTip (toolTip.arg(prop->name().c_str()));
       bool value;
       /* bool success = */ prop->get(value);
       cb->setChecked(value);
@@ -51,7 +56,13 @@ namespace gepetto {
       const viewer::EnumProperty::Ptr_t enumProp = viewer::dynamic_pointer_cast<viewer::EnumProperty> (prop);
       const viewer::MetaEnum* enumMeta = enumProp->metaEnum();
 
+      QString toolTip (
+          "Python:\n"
+          "  gui.getIntProperty(nodeName,\"%1\")\n"
+          "  gui.setIntProperty(nodeName,\"%1\",int)");
+
       QComboBox* cb = new QComboBox;
+      cb->setToolTip (toolTip.arg(prop->name().c_str()));
       int value;
       /* bool success = */ enumProp->get(value);
       std::size_t indexSelected = 0;
@@ -70,7 +81,12 @@ namespace gepetto {
 
     QWidget* stringPropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop)
     {
+      QString toolTip (
+          "Python:\n"
+          "  gui.getStringProperty(nodeName,\"%1\")\n"
+          "  gui.setStringProperty(nodeName,\"%1\",str)");
       QLineEdit* le = new QLineEdit;
+      le->setToolTip (toolTip.arg(prop->name().c_str()));
       std::string value;
       /* bool success = */ prop->get(value);
       le->setText(QString::fromStdString(value));
@@ -83,7 +99,12 @@ namespace gepetto {
 
     QWidget* floatPropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop)
     {
+      QString toolTip (
+          "Python:\n"
+          "  gui.getFloatProperty(nodeName,\"%1\")\n"
+          "  gui.setFloatProperty(nodeName,\"%1\",float)");
       QDoubleSpinBox* dsb = new QDoubleSpinBox;
+      dsb->setToolTip (toolTip.arg(prop->name().c_str()));
       float value;
       /* bool success = */ prop->get(value);
       dsb->setValue(value);
@@ -97,7 +118,12 @@ namespace gepetto {
     QWidget* intPropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop,
         bool isSigned)
     {
+      QString toolTip (
+          "Python:\n"
+          "  gui.getIntProperty(nodeName,\"%1\")\n"
+          "  gui.setIntProperty(nodeName,\"%1\",int)");
       QSpinBox* dsb = new QSpinBox;
+      dsb->setToolTip (toolTip.arg(prop->name().c_str()));
       int value;
       if (isSigned) {
         /* bool success = */ prop->get(value);
@@ -120,12 +146,17 @@ namespace gepetto {
     QWidget* colorPropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop)
     {
       if (!prop->hasWriteAccess()) return NULL;
+      QString toolTip (
+          "Python:\n"
+          "  gui.getColorProperty(nodeName,\"%1\")\n"
+          "  gui.setColorProperty(nodeName,\"%1\",int)");
       osgVector4 value;
       /* bool success = */ prop->get(value);
       QColor color;
       color.setRgbF((qreal)value[0],(qreal)value[1],(qreal)value[2],(qreal)value[3]);
 
       QPushButton* button = new QPushButton("Select color");
+      button->setToolTip (toolTip.arg(prop->name().c_str()));
       // Set icon for current color value
 
       /// Color dialog should be opened in a different place
@@ -139,17 +170,38 @@ namespace gepetto {
       return button;
     }
 
+    QWidget* vector3PropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop)
+    {
+      if (!prop->hasWriteAccess()) return NULL;
+
+      QString toolTip (
+          "Python:\n"
+          "  gui.getVector3Property(nodeName,\"%1\")\n"
+          "  gui.setVector3Property(nodeName,\"%1\",int)");
+      QPushButton* button = new QPushButton("Set vector 3");
+      button->setToolTip (toolTip.arg(prop->name().c_str()));
+
+      /// Vector3 dialog should be opened in a different place
+      Vector3Dialog* cfgDialog = new Vector3Dialog(prop,
+          bti->text(), MainWindow::instance());
+
+      cfgDialog->setProperty("propertyName", QString::fromStdString(prop->name()));
+      cfgDialog->connect(button, SIGNAL(clicked()), SLOT(show()));
+      bti->connect (cfgDialog, SIGNAL(valueChanged (const osgVector3&)),
+          SLOT(setVector3Property(const osgVector3&)));
+
+      return button;
+    }
+
     QWidget* configurationPropertyEditor (BodyTreeItem* bti, const PropertyPtr_t prop)
     {
       if (!prop->hasWriteAccess()) return NULL;
-      Configuration value;
-      /* bool success = */ prop->get(value);
 
       QPushButton* button = new QPushButton("Set transform");
 
       /// Color dialog should be opened in a different place
-      ConfigurationDialog* cfgDialog = new ConfigurationDialog(bti->text(),
-          value, MainWindow::instance());
+      ConfigurationDialog* cfgDialog = new ConfigurationDialog(prop,
+          bti->text(), MainWindow::instance());
 
       cfgDialog->setProperty("propertyName", QString::fromStdString(prop->name()));
       cfgDialog->connect(button, SIGNAL(clicked()), SLOT(show()));
@@ -206,6 +258,8 @@ namespace gepetto {
           field = intPropertyEditor(this, prop, false);
         } else if (prop->type() == "Configuration") {
           field = configurationPropertyEditor(this, prop);
+        } else if (prop->type() == "osgVector3") {
+          field = vector3PropertyEditor (this, prop);
         } else if (prop->type() == "osgVector4") {
           if (name.contains ("color", Qt::CaseInsensitive)) {
             field = colorPropertyEditor (this, prop);
@@ -214,8 +268,10 @@ namespace gepetto {
           }
         }
         if (field != NULL) {
+          QLabel* label (new QLabel (name + ':'));
+          label->setToolTip (field->toolTip());
           field->setProperty("propertyName", name);
-          l->addRow(name + ':', field);
+          l->addRow(label, field);
         } else {
           qDebug() << "Unhandled property" << name << "of type" << prop->type().c_str() << ".";
         }
@@ -231,7 +287,11 @@ namespace gepetto {
         if (nameVariant.isValid()) {
           std::string name = nameVariant.toString().toStdString();
           ScopedLock lock (MainWindow::instance()->osg()->osgFrameMutex());
-          node_->setProperty<T>(name, value);
+          try {
+            node_->setProperty<T>(name, value);
+          } catch (const std::exception& e) {
+            MainWindow::instance()->logError (e.what());
+          }
         } else {
           qDebug() << "Sender has no property propertyName" << sender;
         }
@@ -269,6 +329,11 @@ namespace gepetto {
     void BodyTreeItem::setFloatProperty (const double& value) const
     {
       setProperty (QObject::sender(), float(value));
+    }
+
+    void BodyTreeItem::setVector3Property (const osgVector3& value) const
+    {
+      setProperty (QObject::sender(), value);
     }
 
     void BodyTreeItem::setColorProperty (const QColor& value) const

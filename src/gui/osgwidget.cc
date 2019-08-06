@@ -29,6 +29,7 @@
 #include <QFileDialog>
 #include <QProcess>
 #include <QTextBrowser>
+#include <QDockWidget>
 
 #include <osg/Camera>
 
@@ -88,6 +89,7 @@ namespace gepetto {
     , process_ (new QProcess (this))
     , showPOutput_ (new QDialog (this, Qt::Dialog | Qt::WindowCloseButtonHint | Qt::WindowMinMaxButtonsHint))
     , pOutput_ (new QTextBrowser())
+    , fullscreen_ (new QWidget (NULL, Qt::Window | Qt::WindowStaysOnTopHint))
     {
       initGraphicsWindowsAndViewer (parent, name);
       initToolBar ();
@@ -108,6 +110,17 @@ namespace gepetto {
       hblayout->addWidget(glWidget);
       glWidget->setMinimumSize(50,10);
 
+      // TODO Adding the properties here is problematic. They won't be
+      // shown in the GUI because the display is created before this code is run.
+      wm_->addProperty (
+        viewer::BoolProperty::create("WindowFixedSize",
+          viewer::BoolProperty::getterFromMemberFunction (this, &OSGWidget::isFixedSize),
+          viewer::BoolProperty::setterFromMemberFunction (this, &OSGWidget::setFixedSize)));
+      wm_->addProperty (
+        viewer::Vector2Property::create("WindowSize",
+          viewer::Vector2Property::getterFromMemberFunction (wm_.get(), &viewer::WindowManager::getWindowDimension),
+          viewer::Vector2Property::Setter_t()));
+
       connect( &timer_, SIGNAL(timeout()), this, SLOT(update()) );
       timer_.start(parent->settings_->refreshRate);
 
@@ -126,6 +139,7 @@ namespace gepetto {
       pickHandler_ = NULL;
       wm_.reset();
       wsm_.reset();
+      delete fullscreen_;
     }
 
     void OSGWidget::paintEvent(QPaintEvent*)
@@ -177,15 +191,13 @@ namespace gepetto {
         if (!outputFile.isNull()) {
           if (QFile::exists(outputFile))
             QFile::remove(outputFile);
-          QString avconv = "avconv";
+          QString avconv = main->settings_->avconv;
 
           QStringList args;
           QString input = "/tmp/gepetto-gui/record/img_0_%d.jpeg";
-          args << "-r" << "50"
+          args << main->settings_->avConvInputOptions
             << "-i" << input
-            << "-vf" << "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-            << "-r" << "25"
-            << "-vcodec" << "libx264"
+            << main->settings_->avConvOutputOptions
             << outputFile;
           qDebug () << args;
 
@@ -194,6 +206,27 @@ namespace gepetto {
           showPOutput_->resize(main->size() / 2);
           showPOutput_->show();
           process_->start(avconv, args);
+          bool started = process_->waitForStarted(-1);
+          if (!started) {
+            showPOutput_->hide();
+            switch (process_->error()) {
+              case QProcess::FailedToStart:
+                main->logError ("Failed to start " + avconv + ". Either it is missing, "
+                    "or you may have insufficient permissions to invoke it.\n");
+                break;
+              case QProcess::Crashed      :
+                main->logError ("" + avconv + " crashed some time after starting successfully.");
+                break;
+              case QProcess::Timedout     :
+              case QProcess::WriteError   :
+              case QProcess::ReadError    :
+              case QProcess::UnknownError :
+                main->logError ("An unknown error made " + avconv + " stopped before "
+                    "finishing.");
+                break;
+            }
+            main->logError ("You can manually run\n" + avconv + " " + args.join(" "));
+          }
         }
       }
     }
@@ -240,6 +273,53 @@ namespace gepetto {
       return true;
     }
 
+    bool OSGWidget::isFixedSize () const
+    {
+      static const std::string name("WindowSize");
+      const viewer::PropertyMap_t& propMap = wm_->properties ();
+      viewer::PropertyMap_t::const_iterator _prop = propMap.find(name);
+      if (_prop == propMap.end()) return false;
+      viewer::PropertyPtr_t size = _prop->second;
+      if (!size) return false;
+      return size->hasWriteAccess();
+    }
+
+    void OSGWidget::setFixedSize (bool fixedSize)
+    {
+      static const std::string name("WindowSize");
+      const viewer::PropertyMap_t& propMap = wm_->properties ();
+      viewer::PropertyMap_t::const_iterator _prop = propMap.find(name);
+      if (_prop == propMap.end()) return;
+      viewer::PropertyPtr_t size = _prop->second;
+      if (!size) return;
+      if (size->hasWriteAccess() == fixedSize) return;
+      // Cast to Vector2Property
+      viewer::Vector2Property::Ptr_t vsize = boost::dynamic_pointer_cast<viewer::Vector2Property>(size);
+      if (!vsize) return;
+      osgQt::GLWidget* glWidget = graphicsWindow_->getGLWidget();
+      if (fixedSize) {
+        glWidget->setSizePolicy (QSizePolicy::Fixed, QSizePolicy::Fixed);
+        // Add write access
+        vsize->setter (viewer::Vector2Property::Setter_t(
+              viewer::Vector2Property::setterFromMemberFunction (this, &OSGWidget::setWindowDimension)
+              ));
+      } else {
+        glWidget->setSizePolicy (QSizePolicy::Preferred, QSizePolicy::Preferred);
+        // Remove write access
+        vsize->setter (viewer::Vector2Property::Setter_t());
+      }
+    }
+
+    void OSGWidget::setWindowDimension (const osgVector2& size)
+    {
+      osgQt::GLWidget* glWidget = graphicsWindow_->getGLWidget();
+      if (isFixedSize()) {
+        glWidget->resize ((int)size[0], (int)size[1]);
+        glWidget->setMinimumSize((int)size[0], (int)size[1]);
+      } else
+        glWidget->setMinimumSize(50,10);
+    }
+
     void OSGWidget::readyReadProcessOutput()
     {
       pOutput_->append(process_->readAll());
@@ -273,10 +353,21 @@ namespace gepetto {
           this, SLOT(captureFrame()))
         ->setToolTip("Take a snapshot");
 
-      QAction* recordMovie = toolBar_->addAction(iconFromTheme("media-record"), "Record movie",
-          this, SLOT(toggleCapture(bool)));
+      QAction* recordMovie = toolBar_->addAction(iconFromTheme("media-record"), "Record movie");
+      connect(recordMovie, SIGNAL(triggered(bool)), SLOT(toggleCapture(bool)), Qt::QueuedConnection);
       recordMovie->setCheckable (true);
       recordMovie->setToolTip("Record the central widget as a sequence of images. You can find the images in /tmp/gepetto-gui/record/img_%d.jpeg");
+
+      QAction* toggleFullscreen = new QAction(iconFromTheme("view-fullscreen"),
+          "Toggle fullscreen mode", this);
+      toggleFullscreen->setShortcut (Qt::SHIFT | Qt::Key_F);
+      toggleFullscreen->setCheckable (true);
+      toggleFullscreen->setChecked (false);
+      connect(toggleFullscreen, SIGNAL(toggled(bool)), SLOT(toggleFullscreenMode(bool)));
+      toolBar_->addAction (toggleFullscreen);
+
+      fullscreen_->setLayout(new QVBoxLayout);
+      fullscreen_->layout()->setContentsMargins (0,0,0,0);
     }
 
     void OSGWidget::initGraphicsWindowsAndViewer (MainWindow* parent, const std::string& name)
@@ -336,6 +427,25 @@ namespace gepetto {
       viewer_->addEventHandler(new osgViewer::HelpHandler);
       viewer_->addEventHandler(pickHandler_);
       viewer_->addEventHandler(new osgViewer::StatsHandler);
+    }
+
+    void OSGWidget::toggleFullscreenMode (bool fullscreenOn)
+    {
+      if (!isVisible()) return;
+      if (fullscreenOn) {
+        QDockWidget* dockOSG = qobject_cast<QDockWidget*>(this->parentWidget());
+        if (dockOSG) {
+          normal_ = this->parentWidget();
+          fullscreen_->layout()->addWidget (this);
+          fullscreen_->showFullScreen();
+        }
+      } else {
+        QDockWidget* dockOSG = qobject_cast<QDockWidget*>(normal_);
+        if (dockOSG) {
+          fullscreen_->hide();
+          dockOSG->setWidget (this);
+        }
+      }
     }
   } // namespace gui
 } // namespace gepetto
